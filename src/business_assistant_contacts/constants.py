@@ -42,6 +42,9 @@ SYSTEM_PROMPT_CONTACTS = """You have access to Google Contacts tools:
 
 ## Creating contacts — IMPORTANT
 Show preview of what will be created, ask for confirmation before calling create_contact.
+After creating, check the response for a "mismatches" field. If present, Google may have \
+merged the new contact with an existing one. Warn the user and show what differs. \
+Suggest reviewing or updating the contact to correct merged data.
 
 ## Deleting contacts
 Search or list first, confirm the correct contact, then delete.

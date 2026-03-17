@@ -88,15 +88,31 @@ class TestContactsService:
         assert "Contact not found" in result
 
     def test_create_contact_success(self) -> None:
+        # Use a person without phone to avoid unexpected-phone mismatch
+        person_no_phone = {
+            "resourceName": "people/c123456",
+            "etag": "%EgUBAi43OBoEAQIFByIMR1ZmQ3hsNW5VVTA9",
+            "names": [
+                {
+                    "displayName": "Alice Smith",
+                    "givenName": "Alice",
+                    "familyName": "Smith",
+                }
+            ],
+            "emailAddresses": [{"value": "alice@example.com"}],
+        }
         mock_client = MagicMock()
-        mock_client.create_contact.return_value = SAMPLE_PERSON
+        mock_client.create_contact.return_value = person_no_phone
         service = self._make_service(mock_client)
 
         result = service.create_contact(
             "Alice", family_name="Smith", email="alice@example.com"
         )
 
-        assert "Contact created: Alice Smith" in result
+        data = json.loads(result)
+        assert data["status"] == "created"
+        assert data["contact"]["name"] == "Alice Smith"
+        assert "warning" not in data
 
     def test_create_contact_failure(self) -> None:
         mock_client = MagicMock()
@@ -122,12 +138,90 @@ class TestContactsService:
             notes="Some notes",
         )
 
-        assert "Contact created" in result
+        data = json.loads(result)
+        assert data["status"] == "created"
         call_args = mock_client.create_contact.call_args[0][0]
         assert "emailAddresses" in call_args
         assert "phoneNumbers" in call_args
         assert "organizations" in call_args
         assert "biographies" in call_args
+
+    def test_create_contact_detects_name_mismatch(self) -> None:
+        merged_person = {
+            "resourceName": "people/c999",
+            "names": [
+                {
+                    "displayName": "Andi Schneider",
+                    "givenName": "Andi",
+                    "familyName": "Schneider",
+                }
+            ],
+            "emailAddresses": [{"value": "a.schneider@theim.de"}],
+            "phoneNumbers": [{"value": "+49 170 9999999"}],
+            "organizations": [{"name": "Theim Kommunikation"}],
+        }
+        mock_client = MagicMock()
+        mock_client.create_contact.return_value = merged_person
+        service = self._make_service(mock_client)
+
+        result = service.create_contact(
+            "Andreas",
+            family_name="Schneider",
+            email="a.schneider@theim.de",
+            organization="Theim Kommunikation",
+        )
+
+        data = json.loads(result)
+        assert data["status"] == "created"
+        assert "warning" in data
+        assert any(m["field"] == "name" for m in data["mismatches"])
+        # Phone was not requested but appeared (from merged contact)
+        assert any(m["field"] == "phone" for m in data["mismatches"])
+
+    def test_create_contact_no_mismatch_when_matching(self) -> None:
+        mock_client = MagicMock()
+        mock_client.create_contact.return_value = SAMPLE_PERSON
+        service = self._make_service(mock_client)
+
+        result = service.create_contact(
+            "Alice",
+            family_name="Smith",
+            email="alice@example.com",
+            phone="+49 170 1234567",
+            organization="ACME Corp",
+            job_title="Engineer",
+        )
+
+        data = json.loads(result)
+        assert data["status"] == "created"
+        assert "warning" not in data
+
+    def test_create_contact_detects_unexpected_phone(self) -> None:
+        person_with_phone = {
+            "resourceName": "people/c555",
+            "names": [
+                {
+                    "displayName": "Alice Smith",
+                    "givenName": "Alice",
+                    "familyName": "Smith",
+                }
+            ],
+            "emailAddresses": [{"value": "alice@example.com"}],
+            "phoneNumbers": [{"value": "+49 170 9999999"}],
+        }
+        mock_client = MagicMock()
+        mock_client.create_contact.return_value = person_with_phone
+        service = self._make_service(mock_client)
+
+        result = service.create_contact(
+            "Alice", family_name="Smith", email="alice@example.com"
+        )
+
+        data = json.loads(result)
+        assert "warning" in data
+        phone_mismatch = [m for m in data["mismatches"] if m["field"] == "phone"]
+        assert len(phone_mismatch) == 1
+        assert phone_mismatch[0]["requested"] == "(not provided)"
 
     def test_update_contact_success(self) -> None:
         mock_client = MagicMock()

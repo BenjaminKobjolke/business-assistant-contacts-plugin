@@ -73,10 +73,22 @@ class ContactsService:
             person_body["biographies"] = [{"value": notes, "contentType": "TEXT_PLAIN"}]
 
         result = self._client.create_contact(person_body)
-        if result:
-            name = _display_name(result)
-            return f"Contact created: {name}"
-        return "Failed to create contact."
+        if not result:
+            return "Failed to create contact."
+
+        stored = _format_contact(result)
+        requested = _requested_fields(
+            given_name, family_name, email, phone, organization, job_title,
+        )
+        mismatches = _detect_mismatches(requested, stored)
+
+        response: dict = {"status": "created", "contact": stored}
+        if mismatches:
+            response["warning"] = (
+                "Google may have merged this with an existing contact."
+            )
+            response["mismatches"] = mismatches
+        return json.dumps(response)
 
     def update_contact(
         self,
@@ -140,6 +152,56 @@ class ContactsService:
         if success:
             return "Contact deleted successfully."
         return "Failed to delete contact."
+
+
+def _requested_fields(
+    given_name: str,
+    family_name: str,
+    email: str,
+    phone: str,
+    organization: str,
+    job_title: str,
+) -> dict[str, str]:
+    """Build a dict of non-empty requested fields for comparison."""
+    fields: dict[str, str] = {"name": f"{given_name} {family_name}".strip()}
+    if email:
+        fields["email"] = email
+    if phone:
+        fields["phone"] = phone
+    if organization:
+        fields["organization"] = organization
+    if job_title:
+        fields["job_title"] = job_title
+    return fields
+
+
+def _detect_mismatches(
+    requested: dict[str, str], stored: dict,
+) -> list[dict[str, str]]:
+    """Compare requested fields against what Google stored. Return list of diffs."""
+    mismatches: list[dict[str, str]] = []
+    for key, req_val in requested.items():
+        stored_val = stored.get(key, "")
+        if req_val and stored_val and req_val.lower() != str(stored_val).lower():
+            mismatches.append({
+                "field": key,
+                "requested": req_val,
+                "stored": str(stored_val),
+            })
+        elif req_val and not stored_val:
+            mismatches.append({
+                "field": key,
+                "requested": req_val,
+                "stored": "(missing)",
+            })
+    # Check for unexpected phone from a merged contact
+    if not requested.get("phone") and stored.get("phone"):
+        mismatches.append({
+            "field": "phone",
+            "requested": "(not provided)",
+            "stored": stored["phone"],
+        })
+    return mismatches
 
 
 def _display_name(person: dict) -> str:
